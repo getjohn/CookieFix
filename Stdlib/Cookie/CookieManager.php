@@ -11,6 +11,8 @@ use Magento\Framework\Stdlib\Cookie\FailureToSendException;
 use Magento\Framework\Stdlib\Cookie\PhpCookieManager;
 
 use Magento\Framework\App\ObjectManager;
+use Magento\Store\Model\ScopeInterface; 
+use Magento\Framework\App\State;
 use Magento\Framework\Stdlib\Cookie\PublicCookieMetadata;
 use Magento\Framework\Stdlib\Cookie\SensitiveCookieMetadata;
 use Magento\Framework\Stdlib\CookieManagerInterface;
@@ -81,24 +83,48 @@ class CookieManager implements CookieManagerInterface
     private $validator;
 
     /**
+     * @var \Magento\Framework\App\Config\ScopeConfigInterface
+     */
+    protected $scopeConfig;
+
+    /**
+     * @var \Magento\Store\Model\StoreManagerInterface
+     */
+    protected $storeManager;
+
+    /**
+     * @var \Magento\Framework\App\State
+     */
+    protected $state;
+
+    /**
      * @param CookieScopeInterface $scope
      * @param CookieReaderInterface $reader
      * @param SameSite $validator
      * @param LoggerInterface $logger
      * @param HttpHeader $httpHeader
+     * @param \Magento\Framework\App\Config\ScopeConfigInterface $scopeConfig
+     * @param \Magento\Store\Model\StoreManagerInterface $storeManager,
+     * @param \Magento\Framework\App\State $state
      */
     public function __construct(
         CookieScopeInterface $scope,
         CookieReaderInterface $reader,
         SameSite $validator,
         LoggerInterface $logger = null,
-        HttpHeader $httpHeader = null
+        HttpHeader $httpHeader = null,
+        \Magento\Framework\App\Config\ScopeConfigInterface $scopeConfig,
+        \Magento\Store\Model\StoreManagerInterface $storeManager,
+        \Magento\Framework\App\State $state
     ) {
         $this->scope = $scope;
         $this->reader = $reader;
         $this->logger = $logger ?: ObjectManager::getInstance()->get(LoggerInterface::class);
         $this->httpHeader = $httpHeader ?: ObjectManager::getInstance()->get(HttpHeader::class);
         $this->validator = $validator;
+        $this->scopeConfig = $scopeConfig;
+    	$this->storeManager = $storeManager;
+        $this->state = $state;
     }
 
     /**
@@ -162,6 +188,7 @@ class CookieManager implements CookieManagerInterface
 
         $version = PHP_VERSION_ID;
         if ($version >= 70300) {
+$this->logger->debug('using new way - setting '.$name.'='.$value.' with ss='.$this->getSameSite());
             $options = [
                 self::KEY_EXPIRES => $expire,
                 self::KEY_PATH => $this->extractValue(CookieMetadata::KEY_PATH, $metadataArray, ''),
@@ -171,7 +198,7 @@ class CookieManager implements CookieManagerInterface
             ];
 
             if ($sameSite) {
-                $options = array_merge($options, [self::KEY_SAME_SITE => 'None']);
+                $options = array_merge($options, [self::KEY_SAME_SITE => $this->getSameSite()]);
             }
 
             $phpSetcookieSuccess = setcookie(
@@ -182,8 +209,9 @@ class CookieManager implements CookieManagerInterface
         } else {
             $domain = $this->extractValue(CookieMetadata::KEY_DOMAIN, $metadataArray, '');
             if ($sameSite) {
-                $domain .= '; SameSite=None';
+                $domain .= '; SameSite=' . $this->getSameSite();
             }
+$this->logger->debug('setting '.$name.'='.$value.' with domains='.$domain);
 
             $phpSetcookieSuccess = setcookie(
                 $name,
@@ -351,4 +379,27 @@ class CookieManager implements CookieManagerInterface
         // Remove the cookie
         unset($_COOKIE[$name]);
     }
+
+    /**
+     * Retrieve SameSite value from config
+     * @return string
+     */
+    public function getSameSite()
+    {
+        $area = 'frontend';
+        $storeId = 0;
+        try {
+            $area = $this->_state->getAreaCode();
+            $store = $this->_storeManager->getStore();
+            if($area == 'frontend' && $store)
+            {
+                $storeId = $store->getStoreId();
+            }
+        }
+        catch(\Exception $e)
+        {
+        }
+        return $this->_scopeConfig->getValue('web/cookie/cookie_samesite', ScopeInterface::SCOPE_STORES, $storeId);
+    }
+
 }
